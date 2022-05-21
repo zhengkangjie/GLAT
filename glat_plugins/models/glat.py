@@ -113,13 +113,18 @@ class Glat(FairseqNATModel):
                 pred_tokens = word_ins_out.argmax(-1)
                 same_num = ((pred_tokens == tgt_tokens) & nonpad_positions).sum(1)
                 input_mask = torch.ones_like(nonpad_positions)
-                bsz, seq_len = tgt_tokens.size()
-                for li in range(bsz):
-                    target_num = (((seq_lens[li] - same_num[li].sum()).float()) * glat['context_p']).long()
-                    if target_num > 0:
-                        input_mask[li].scatter_(dim=0, index=torch.randperm(seq_lens[li])[:target_num].cuda(), value=0)
-                input_mask = input_mask.eq(1)
+                input_mask = torch.cat((input_mask[:, 0].unsqueeze(1), input_mask), dim=-1)
+                
+                target_num = ((seq_lens - same_num).float() * glat['context_p']).long() # A new glancing training implementation
+                tokens_score = input_mask.clone().float().uniform_()
+                tokens_score[:, 0] = 1024
+                index_origin = torch.arange(tokens_score.size(-1), device=tokens_score.device).expand_as(tokens_score).contiguous()
+                sorting_orders = tokens_score.sort(1)[1]
+                sorting_orders.masked_fill_(index_origin >= target_num[:, None].expand_as(sorting_orders), 0)
+                input_mask[torch.arange(input_mask.size(0)).unsqueeze(1), sorting_orders] = 0
+                input_mask = input_mask[:, 1:].bool()
                 input_mask = input_mask.masked_fill(~nonpad_positions,False)
+
                 glat_prev_output_tokens = prev_output_tokens.masked_fill(~input_mask, 0) + tgt_tokens.masked_fill(input_mask, 0)
                 glat_tgt_tokens = tgt_tokens.masked_fill(~input_mask, self.pad)
 
